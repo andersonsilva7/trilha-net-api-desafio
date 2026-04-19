@@ -17,6 +17,13 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// Aplica migrations pendentes no startup para facilitar o deploy (ex.: Azure App Service).
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetRequiredService<OrganizadorContext>();
+    dbContext.Database.Migrate();
+}
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
