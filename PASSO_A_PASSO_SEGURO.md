@@ -1,90 +1,128 @@
-# Passo a passo de setup seguro (sem credenciais no Git)
+# Passo a passo: como executar o projeto
 
-Use este guia em qualquer máquina nova para configurar e subir a API `trilha-net-api-desafio` sem expor segredos.
+Este guia descreve, em ordem, como rodar a API `trilha-net-api-desafio` em
+ambiente local (SQLite) e em produção (SQL Server / Azure SQL), seguindo o
+mesmo padrão adotado no projeto `ProductAPI`.
 
-## 1) Pré-requisitos
+## Pré-requisitos
 
-- .NET SDK 8 instalado
+- .NET SDK 8
 - Git
-- Acesso ao SQL Server do Azure (ou outra base SQL Server)
+- (Opcional, só para produção) Acesso ao SQL Server / Azure SQL
 
-## 2) Clonar e entrar no projeto
+## 1) Clonar o repositório
 
 ```powershell
-git clone <URL_DO_SEU_REPOSITORIO>
+git clone <URL_DO_REPOSITORIO>
 cd trilha-net-api-desafio
 ```
 
-## 3) Restaurar dependências e validar build
+## 2) Restaurar pacotes e compilar
 
 ```powershell
 dotnet restore
 dotnet build
 ```
 
-## 4) Configurar conexão local com User Secrets
+## 3) Executar localmente com SQLite (Development)
 
-> O `appsettings.json` já está com placeholders (`SEU_*`), portanto não há credenciais reais no projeto.
+Em ambiente de desenvolvimento o projeto usa **SQLite** como banco local, sem
+exigir SQL Server na máquina. O arquivo de banco é criado automaticamente na
+raiz do projeto.
 
-No terminal, configure a connection string real **somente nesta máquina**:
+1. Garanta que a variável de ambiente esteja em `Development` (o
+   `launchSettings.json` já faz isso para o perfil `TrilhaApiDesafio`).
+2. A connection string local está em `appsettings.Development.json`:
 
-```powershell
-dotnet user-secrets init
-dotnet user-secrets set "ConnectionStrings:ConexaoPadrao" "Server=tcp:<SEU_SERVIDOR>,1433;Initial Catalog=Organizador;Persist Security Info=False;User ID=<SEU_USUARIO>;Password=<SUA_SENHA>;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
-```
+   ```json
+   "ConnectionStrings": {
+     "ConexaoPadrao": "Data Source=organizador-local.db"
+   }
+   ```
 
-## 5) Validar migrations (pós-credencial)
+3. Rode a aplicação:
+
+   ```powershell
+   $env:ASPNETCORE_ENVIRONMENT = "Development"
+   dotnet run --project TrilhaApiDesafio.csproj --urls "http://localhost:5181"
+   ```
+
+4. Acesse o Swagger: `http://localhost:5181/swagger`.
+
+> No modo Development, o código chama `Database.EnsureCreated()` e cria o
+> arquivo `organizador-local.db` automaticamente, sem necessidade de rodar
+> migrations.
+
+## 4) Rodar em produção (SQL Server / Azure SQL)
+
+Em qualquer ambiente diferente de `Development`, a aplicação usa
+`UseSqlServer` e aplica `Database.Migrate()` no startup.
+
+### 4.1) Definir a connection string
+
+- Nunca versionar credenciais reais em `appsettings.json`.
+- Preferir variável de ambiente no host:
+
+  ```
+  ConnectionStrings__ConexaoPadrao=Server=tcp:<SERVIDOR>,1433;Initial Catalog=Organizador;User ID=<USUARIO>;Password=<SENHA>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;
+  ```
+
+  Observação: use exatamente dois underlines (`__`) entre `ConnectionStrings`
+  e `ConexaoPadrao`.
+
+### 4.2) Gerar migrations antes do deploy
+
+Só é necessário na primeira vez (ou quando o modelo mudar):
 
 ```powershell
 dotnet tool install --global dotnet-ef
-cd ./
 dotnet ef migrations add InitialCreate
-dotnet ef database update
 ```
 
-## 6) Rodar localmente
+As migrations geradas devem ser commitadas no repositório para que a aplicação
+consiga aplicar `Database.Migrate()` no primeiro boot em produção.
+
+### 4.3) Publicar no Azure App Service
+
+1. Criar App Service com runtime `.NET 8 (LTS)`.
+2. Em `Configuration > Application settings`, adicionar:
+   - `ASPNETCORE_ENVIRONMENT=Production`
+   - `ConnectionStrings__ConexaoPadrao=<string real Azure SQL>`
+3. Publicar via Visual Studio (`Publish > Azure App Service`) ou
+   `dotnet publish -c Release` + Zip Deploy.
+
+### 4.4) Validar pós-deploy
+
+- Abrir `https://<seu-app>.azurewebsites.net/Tarefa/ObterTodos` para ver a
+  lista (vazia no início).
+- Criar uma tarefa via `POST /Tarefa` e reconsultar `GET /Tarefa/ObterTodos`.
+
+## 5) Desenvolvimento local apontando para SQL Server (opcional)
+
+Se quiser testar localmente contra SQL Server em vez de SQLite:
+
+1. Definir a variável de ambiente diferente de `Development`, por exemplo:
+
+   ```powershell
+   $env:ASPNETCORE_ENVIRONMENT = "Staging"
+   ```
+
+2. Informar a connection string real via User Secrets (não versionado):
+
+   ```powershell
+   dotnet user-secrets init
+   dotnet user-secrets set "ConnectionStrings:ConexaoPadrao" "Server=<SERVIDOR>,1433;Initial Catalog=Organizador;User ID=<USUARIO>;Password=<SENHA>;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+   ```
+
+3. `dotnet run` ira usar `UseSqlServer` e exigira que as migrations existam.
+
+## 6) Resumo rápido (dev local em SQLite)
 
 ```powershell
-dotnet run
+dotnet restore
+dotnet build
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet run --project TrilhaApiDesafio.csproj --urls "http://localhost:5181"
 ```
 
-Abrir no navegador: `https://localhost:<porta>/swagger`
-
-## 7) Publicar no Azure (sem segredos no código)
-
-### Azure SQL
-
-- Reaproveitar o mesmo SQL Server lógico.
-- Criar nova database: `Organizador`.
-- Definir login/senha no servidor apenas no Azure.
-
-### App Service
-
-- Criar um novo App Service para essa API (ex.: `aulaorganizadorapi`).
-- Runtime: `.NET 8 (LTS)`.
-
-### Configurar variável de ambiente do App Service
-
-Adicionar em **Configuration > Application settings**:
-
-- `ConnectionStrings__ConexaoPadrao`
-- Valor da conexão real da Azure SQL (string completa)
-
-## 8) Após finalizar os testes nesta máquina, remover o passo a passo
-
-Se o arquivo for usado **somente local** e não for subir para o repositório:
-
-```powershell
-Remove-Item .\\PASSO_A_PASSO_SEGURO.md -Force
-```
-
-Se o arquivo já tiver sido commitado e você quiser removê-lo do repositório:
-
-```powershell
-git rm --cached .\\PASSO_A_PASSO_SEGURO.md
-git commit -m "remove: temporary setup guide file"
-```
-
----
-
-> Dica: não grave credenciais reais em `README.md`, `appsettings*.json` ou qualquer arquivo versionado.
+Abrir: `http://localhost:5181/swagger`
